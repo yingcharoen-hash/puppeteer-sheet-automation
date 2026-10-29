@@ -30,6 +30,7 @@ jobs:
 
       - name: Run Automation Bot
         env:
+          TZ: 'Asia/Bangkok'
           WEB_EMAIL: ${{ secrets.WEB_EMAIL }}
           WEB_PASSWORD: ${{ secrets.WEB_PASSWORD }}
           GOOGLE_SERVICE_ACCOUNT_KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_KEY }}

@@ -5,6 +5,9 @@ import { parse } from 'csv-parse/sync';
 import { google } from 'googleapis';
 import 'dotenv/config';
 
+// บังคับเขตเวลาของ Node.js เป็นเวลาประเทศไทย (UTC+7)
+process.env.TZ = 'Asia/Bangkok';
+
 // --- การตั้งค่า URL และ สเปรดชีต ---
 const BASE_URL = process.env.WEB_URL || 'https://yingcharoen-parking.web.app';
 const LOGIN_URL = `${BASE_URL.replace(/\/+$/, '')}/login.html`;
@@ -129,6 +132,9 @@ async function runBot() {
   const browser = await puppeteer.launch(launchOptions);
   const page = await browser.newPage();
   await page.setViewport({ width: 1920, height: 1080 });
+
+  // จำลองเขตเวลาของ Browser เป็นประเทศไทย (Asia/Bangkok / UTC+7) เพื่อให้เวลาใน CSV ตรงกับเวลาไทย
+  await page.emulateTimezone('Asia/Bangkok');
 
   // ดักจับการดาวน์โหลดไฟล์ผ่าน Chrome DevTools Protocol (CDP)
   const client = await page.target().createCDPSession();
