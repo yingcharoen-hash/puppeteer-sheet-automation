@@ -301,7 +301,8 @@ async function appendDataToSheet(sheets, csvFilePath) {
   }
 
   // ข้ามแถวที่ 1 (Header: รหัสพนักงาน, ชื่อ-นามสกุล, เวลาที่สแกน, สแกนโดย)
-  const rowsToAppend = records.slice(1);
+  // และกลับลำดับจากเก่าไปใหม่ (เนื่องจาก CSV บนเว็บเรียงแบบล่าสุดอยู่บน)
+  const rowsToAppend = records.slice(1).reverse();
   console.log(`➕ กำลังนำข้อมูลจำนวน ${rowsToAppend.length} แถว Append ต่อท้ายในชีท "${RAW_DATA_SHEET_NAME}"...`);
 
   await sheets.spreadsheets.values.append({
@@ -315,6 +316,54 @@ async function appendDataToSheet(sheets, csvFilePath) {
   });
 
   console.log('✅ บันทึกข้อมูลเข้า Google Sheets สำเร็จเรียบร้อย');
+}
+
+/**
+ * เรียงลำดับข้อมูลในชีท "ข้อมูล" ตามคอลัมน์ C (เวลาที่สแกน) จากเก่าไปใหม่ (ASCENDING)
+ * เพื่อให้วันที่และเวลาเรียงต่อเนื่องกันอย่างถูกต้อง
+ */
+async function sortDataByColumnC(sheets) {
+  console.log(`🔃 กำลังเรียงลำดับข้อมูล (Sort) ในชีท "${RAW_DATA_SHEET_NAME}" ตามคอลัมน์ C (เวลาที่สแกน)...`);
+
+  const meta = await sheets.spreadsheets.get({
+    spreadsheetId: SPREADSHEET_ID,
+    fields: 'sheets.properties',
+  });
+
+  const rawSheet = meta.data.sheets.find(s => s.properties.title === RAW_DATA_SHEET_NAME);
+  if (!rawSheet) {
+    console.log(`⚠️ ไม่พบชีท "${RAW_DATA_SHEET_NAME}"`);
+    return;
+  }
+
+  const sheetId = rawSheet.properties.sheetId;
+  const colCount = rawSheet.properties.gridProperties?.columnCount || 9;
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId: SPREADSHEET_ID,
+    requestBody: {
+      requests: [
+        {
+          sortRange: {
+            range: {
+              sheetId: sheetId,
+              startRowIndex: 1, // ข้ามแถวที่ 1 (Header)
+              startColumnIndex: 0,
+              endColumnIndex: colCount,
+            },
+            sortSpecs: [
+              {
+                dimensionIndex: 2, // คอลัมน์ C: เวลาที่สแกน (A=0, B=1, C=2)
+                sortOrder: 'ASCENDING',
+              },
+            ],
+          },
+        },
+      ],
+    },
+  });
+
+  console.log(`✅ เรียงลำดับข้อมูลตามคอลัมน์ C (เวลาที่สแกน) เรียบร้อยแล้ว`);
 }
 
 /**
@@ -444,6 +493,8 @@ async function main() {
     // ขั้นตอนที่ 2: นำข้อมูลไปต่อท้ายในชีท "ข้อมูล" (หากมีไฟล์)
     if (csvFilePath) {
       await appendDataToSheet(sheets, csvFilePath);
+      // ขั้นตอนที่ 2.1: จัดเรียงข้อมูลในชีท "ข้อมูล" ตามคอลัมน์ C (เวลาที่สแกน) ให้เรียงต่อเนื่องจากบนลงล่าง
+      await sortDataByColumnC(sheets);
       fs.rmSync(DOWNLOAD_DIR, { recursive: true, force: true });
     } else {
       console.log('ℹ️ ข้ามการ Append เนื่องจากไม่มีข้อมูล CSV ใหม่');
