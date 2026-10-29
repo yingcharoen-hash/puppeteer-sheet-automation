@@ -1,0 +1,16 @@
+{
+  "name": "puppeteer-sheet-automation",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Daily automated export and Google Sheet synchronization with Puppeteer",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "csv-parse": "^5.5.6",
+    "dotenv": "^16.4.5",
+    "googleapis": "^144.0.0",
+    "puppeteer": "^23.6.0"
+  }
+}
