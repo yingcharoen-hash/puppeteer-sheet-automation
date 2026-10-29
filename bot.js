@@ -169,9 +169,22 @@ async function runBot() {
     console.log(`🌐 นำทางไปยังหน้าส่งออกข้อมูล: ${EXPORT_URL}`);
     await page.goto(EXPORT_URL, { waitUntil: 'networkidle2', timeout: 60000 });
 
-    // รอให้หน้า Export โหลด (รอปุ่ม export และฟิลด์ใส่วันที่)
-    await page.waitForSelector('#export-button', { timeout: 20000 });
-    await page.waitForSelector('#start-date', { timeout: 20000 });
+    console.log('⏳ กำลังรอการยืนยันสิทธิ์ Role และโหลดเนื้อหาหน้า Export...');
+    // รอจนกว่า #main-content จะปลด class hidden (แปลว่า Firebase Auth ตรวจสอบ Role สำเร็จ)
+    await page.waitForFunction(() => {
+      const denied = document.getElementById('access-denied');
+      if (denied && !denied.classList.contains('hidden')) {
+        throw new Error('บัญชีนี้ไม่มีสิทธิ์เข้าถึงหน้า Export (ต้องการสิทธิ์ admin หรือ super-admin)');
+      }
+      const main = document.getElementById('main-content');
+      return main && !main.classList.contains('hidden');
+    }, { timeout: 30000 });
+
+    // รอให้ loadOfficers() ทำงานเสร็จ
+    await page.waitForFunction(() => {
+      const select = document.getElementById('officer-select');
+      return select && select.options.length > 0;
+    }, { timeout: 15000 });
 
     // คำนวณช่วงเวลา: Start Date = เมื่อวาน, End Date = วันนี้
     const startDate = getThaiDate(-1);
@@ -184,29 +197,49 @@ async function runBot() {
       if (startEl) {
         startEl.value = s;
         startEl.dispatchEvent(new Event('change', { bubbles: true }));
+        startEl.dispatchEvent(new Event('input', { bubbles: true }));
       }
       if (endEl) {
         endEl.value = e;
         endEl.dispatchEvent(new Event('change', { bubbles: true }));
+        endEl.dispatchEvent(new Event('input', { bubbles: true }));
       }
     }, startDate, endDate);
 
     // 3. เลือก Officer เป็น "All Officers"
     console.log('👤 เลือก Officer เป็น "All Officers"...');
-    await page.waitForSelector('#officer-select', { timeout: 10000 });
     await page.select('#officer-select', 'all');
 
-    // 4. คลิกปุ่มสีเขียว "Export to CSV"
+    // 4. คลิกปุ่มสีเขียว "Export to CSV" ผ่าน evaluate เพื่อการันตีการคลิก 100%
     console.log('📥 กำลังคลิกปุ่มสีเขียว "Export to CSV"...');
-    await page.click('#export-button');
+    await page.evaluate(() => {
+      const btn = document.getElementById('export-button');
+      if (btn) btn.click();
+    });
 
     // ตรวจสอบสถานะการดึงข้อมูลบนหน้าเว็บ
-    await new Promise(r => setTimeout(r, 2000));
-    const statusText = await page.evaluate(() => {
+    console.log('⏳ กำลังรอผลการค้นหาข้อมูลจาก Firebase...');
+    const exportResult = await page.waitForFunction(() => {
       const el = document.getElementById('export-status');
-      return el ? el.innerText : '';
-    });
-    console.log(`ℹ️ สถานะการส่งออกจากหน้าเว็บ: "${statusText}"`);
+      if (!el) return null;
+      const text = el.innerText.trim();
+      if (text.includes('Successfully exported') || text.includes('No data found') || text.includes('Error:')) {
+        return text;
+      }
+      return null;
+    }, { timeout: 35000 });
+
+    const statusMessage = await exportResult.jsonValue();
+    console.log(`ℹ️ สถานะบนหน้าเว็บ: "${statusMessage}"`);
+
+    if (statusMessage.includes('No data found')) {
+      console.log('ℹ️ ไม่พบรายการข้อมูลใหม่ในช่วงเวลาที่เลือก (No data found)');
+      return null;
+    }
+
+    if (statusMessage.includes('Error:')) {
+      throw new Error(`เกิดข้อผิดพลาดในการ Export บนหน้าเว็บ: ${statusMessage}`);
+    }
 
     // รอการดาวน์โหลดไฟล์ CSV
     console.log('⏳ รอการดาวน์โหลดไฟล์ CSV...');
@@ -230,7 +263,6 @@ async function waitForFileDownload(downloadPath, timeoutMs = 35000) {
       const csvFile = files.find(f => f.endsWith('.csv') && !f.endsWith('.crdownload') && !f.endsWith('.tmp'));
       if (csvFile) {
         const fullPath = path.join(downloadPath, csvFile);
-        // ตรวจสอบว่าไฟล์มีขนาดมากกว่า 0 bytes และเขียนเสร็จแล้ว
         const stats = fs.statSync(fullPath);
         if (stats.size > 0) {
           return fullPath;
@@ -380,14 +412,17 @@ async function main() {
     // ขั้นตอนที่ 1: ดึงไฟล์ CSV
     const csvFilePath = await runBot();
 
-    // ขั้นตอนที่ 2: นำข้อมูลไปต่อท้ายในชีท "ข้อมูล"
-    await appendDataToSheet(sheets, csvFilePath);
+    // ขั้นตอนที่ 2: นำข้อมูลไปต่อท้ายในชีท "ข้อมูล" (หากมีไฟล์)
+    if (csvFilePath) {
+      await appendDataToSheet(sheets, csvFilePath);
+      fs.rmSync(DOWNLOAD_DIR, { recursive: true, force: true });
+    } else {
+      console.log('ℹ️ ข้ามการ Append เนื่องจากไม่มีข้อมูล CSV ใหม่');
+    }
 
     // ขั้นตอนที่ 3: ล้างฟิลเตอร์ Pivot Table ในชีท "สรุป"
     await resetPivotTableDateFilter(sheets);
 
-    // ล้างไฟล์ดาวน์โหลดชั่วคราว
-    fs.rmSync(DOWNLOAD_DIR, { recursive: true, force: true });
     console.log('🎉 เสร็จสิ้นกระบวนการทำงานทุกขั้นตอนเรียบร้อย 100%');
   } catch (err) {
     console.error('❌ เกิดข้อผิดพลาด:', err.message || err);
