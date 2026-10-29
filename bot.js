@@ -71,7 +71,7 @@ async function runBot() {
   }
 
   console.log('🚀 กำลังเริ่มต้น Chromium Browser...');
-  const browser = await puppeteer.launch({
+  const launchOptions = {
     headless: true,
     args: [
       '--no-sandbox',
@@ -80,7 +80,15 @@ async function runBot() {
       '--disable-gpu',
       '--window-size=1920,1080',
     ],
-  });
+  };
+
+  // หากรันบน Ubuntu Runner ของ GitHub Actions ให้ใช้ System Chrome ทันที
+  if (fs.existsSync('/usr/bin/google-chrome')) {
+    launchOptions.executablePath = '/usr/bin/google-chrome';
+    console.log('🌐 ใช้ Google Chrome ของระบบ: /usr/bin/google-chrome');
+  }
+
+  const browser = await puppeteer.launch(launchOptions);
 
   const page = await browser.newPage();
   await page.setViewport({ width: 1920, height: 1080 });
@@ -312,7 +320,24 @@ async function resetPivotTableDateFilter(sheets) {
  */
 async function main() {
   try {
-    console.log('=== เริ่มต้นกระบวนการ Automation ===');
+    console.log('=== เริ่มต้นกระบวนการ Daily Automation ===');
+
+    // 1. ตรวจสอบ GitHub Secrets / Environment Variables
+    const missingVars = [];
+    if (!process.env.WEB_EMAIL) missingVars.push('WEB_EMAIL');
+    if (!process.env.WEB_PASSWORD) missingVars.push('WEB_PASSWORD');
+    if (!process.env.GOOGLE_SERVICE_ACCOUNT_KEY) missingVars.push('GOOGLE_SERVICE_ACCOUNT_KEY');
+
+    if (missingVars.length > 0) {
+      console.error('\n======================================================');
+      console.error('❌ ตรวจพบว่ายังไม่ได้ตั้งค่า GitHub Secrets ดังต่อไปนี้:');
+      missingVars.forEach(v => console.error(`   - ${v}`));
+      console.error('👉 วิธีแก้ไข: ไปที่ Repo บน GitHub -> Settings -> Secrets and variables -> Actions');
+      console.error('   แล้วกดปุ่ม "New repository secret" เพื่อเพิ่มตัวแปรให้ครบถ้วน');
+      console.error('======================================================\n');
+      process.exit(1);
+    }
+
     const sheets = getGoogleSheetsClient();
 
     // ขั้นตอนที่ 1: ดึงไฟล์ CSV
