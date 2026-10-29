@@ -312,22 +312,38 @@ async function appendDataToSheet(sheets, csvFilePath) {
 }
 
 /**
- * สั่งล้างฟิลเตอร์ใน Pivot Table หน้าชีท "สรุป" ตรงฟิลด์ "วันที่ตามกะงาน"
+ * ตั้งค่าฟิลเตอร์ใน Pivot Table หน้าชีท "สรุป" ตรงฟิลด์ "วันที่ตามกะงาน" เป็น "Select all"
+ * โดยคงเงื่อนไขของฟิลเตอร์อื่นๆ เช่น "ปี" ไว้ตามเดิม 100%
  */
 async function resetPivotTableDateFilter(sheets) {
-  console.log(`🔄 กำลังตรวจสอบและล้างฟิลเตอร์ใน Pivot Table หน้าชีท "${SUMMARY_SHEET_NAME}"...`);
+  console.log(`🔄 กำลังอัปเดตฟิลเตอร์ "วันที่ตามกะงาน" ใน Pivot Table ให้เป็น Select all (คงฟิลเตอร์ "ปี" ไว้)...`);
 
+  // 1. ดึงรายการวันที่ทั้งหมดที่มีในคอลัมน์ G (วันที่ตามกะงาน) ของชีท "ข้อมูล"
+  const valRes = await sheets.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `'${RAW_DATA_SHEET_NAME}'!G2:G`,
+  });
+
+  const uniqueDates = Array.from(
+    new Set((valRes.data.values || []).map(r => r[0] || ''))
+  );
+  console.log(`📅 พบรายการวันที่ทั้งหมดในชีท "${RAW_DATA_SHEET_NAME}": ${uniqueDates.length} รายการ`);
+
+  // 2. ดึงข้อมูล Pivot Table และจำนวนแถวทั้งหมด
   const res = await sheets.spreadsheets.get({
     spreadsheetId: SPREADSHEET_ID,
     fields: 'sheets(properties,data.rowData.values.pivotTable)',
   });
 
   const summarySheet = res.data.sheets.find(s => s.properties.title === SUMMARY_SHEET_NAME);
+  const rawSheet = res.data.sheets.find(s => s.properties.title === RAW_DATA_SHEET_NAME);
+
   if (!summarySheet || !summarySheet.data) {
     console.log(`⚠️ ไม่พบข้อมูลชีท "${SUMMARY_SHEET_NAME}" หรือไม่มี Pivot Table`);
     return;
   }
 
+  const totalRawRows = rawSheet?.properties?.gridProperties?.rowCount || 20000;
   const sheetId = summarySheet.properties.sheetId;
   const requests = [];
 
@@ -344,30 +360,37 @@ async function resetPivotTableDateFilter(sheets) {
         const cell = row.values[c];
         if (cell.pivotTable) {
           const pivot = cell.pivotTable;
-          let modified = false;
 
-          // ลบ criteria เก่าออกเพื่อให้เลือกแสดงข้อมูลวันที่ทั้งหมด
-          if (pivot.criteria) {
-            for (const colIndex of Object.keys(pivot.criteria)) {
-              delete pivot.criteria[colIndex];
-              modified = true;
-            }
+          // ขยายขอบเขตของข้อมูลต้นฉบับให้คลุมแถวล่าสุดทั้งหมดของชีทข้อมูล
+          if (pivot.source) {
+            pivot.source.endRowIndex = totalRawRows;
           }
 
-          if (pivot.filterSpecs && pivot.filterSpecs.length > 0) {
+          if (!pivot.filterSpecs) {
             pivot.filterSpecs = [];
-            modified = true;
           }
 
-          if (modified) {
-            requests.push({
-              updateCells: {
-                rows: [{ values: [{ pivotTable: pivot }] }],
-                fields: 'pivotTable',
-                start: { sheetId, rowIndex: startRow + r, columnIndex: startCol + c },
-              },
+          // ค้นหาฟิลเตอร์ของ "วันที่ตามกะงาน" (คอลัมน์ index 6)
+          let dateFilter = pivot.filterSpecs.find(f => f.columnOffsetIndex === 6);
+          if (dateFilter) {
+            // ตั้งค่า visibleValues ให้ครบทุกค่า = "Select all"
+            dateFilter.filterCriteria = { visibleValues: uniqueDates };
+          } else {
+            pivot.filterSpecs.push({
+              columnOffsetIndex: 6,
+              filterCriteria: { visibleValues: uniqueDates },
             });
           }
+
+          // **สำคัญ**: ฟิลเตอร์ของ "ปี" (คอลัมน์ index 7) และฟิลเตอร์อื่นๆ จะถูกปล่อยไว้เหมือนเดิม ไม่แตะต้อง
+
+          requests.push({
+            updateCells: {
+              rows: [{ values: [{ pivotTable: pivot }] }],
+              fields: 'pivotTable',
+              start: { sheetId, rowIndex: startRow + r, columnIndex: startCol + c },
+            },
+          });
         }
       }
     }
@@ -378,9 +401,9 @@ async function resetPivotTableDateFilter(sheets) {
       spreadsheetId: SPREADSHEET_ID,
       requestBody: { requests },
     });
-    console.log(`✅ ล้างฟิลเตอร์ใน Pivot Table เรียบร้อยแล้ว (แสดงวันที่ทั้งหมดอัตโนมัติ)`);
+    console.log(`✅ อัปเดตฟิลเตอร์ "วันที่ตามกะงาน" เป็น Select all (${uniqueDates.length} รายการ) สำเร็จ โดยคงเงื่อนไข "ปี" ไว้เรียบร้อยแล้ว`);
   } else {
-    console.log(`ℹ️ Pivot Table เปิดแสดงข้อมูลทั้งหมดอยู่แล้ว`);
+    console.log(`ℹ️ ไม่พบ Pivot Table ที่ต้องอัปเดต`);
   }
 }
 
