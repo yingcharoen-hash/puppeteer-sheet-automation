@@ -31,21 +31,59 @@ function getThaiDate(offsetDays = 0) {
 }
 
 /**
+ * แปลงค่า GOOGLE_SERVICE_ACCOUNT_KEY จาก Environment Variables ให้เป็น JSON Object
+ * รองรับทั้ง Raw JSON, Pretty JSON, และ Base64 Encoded JSON
+ */
+function parseGoogleCredentials(raw) {
+  if (!raw || typeof raw !== 'string') {
+    throw new Error('กรุณาระบุ GOOGLE_SERVICE_ACCOUNT_KEY ใน GitHub Secrets');
+  }
+
+  let str = raw.trim();
+
+  // ปลดเครื่องหมายคำพูดรอบนอกที่อาจติดมา
+  if ((str.startsWith("'") && str.endsWith("'")) || (str.startsWith('"') && str.endsWith('"'))) {
+    str = str.slice(1, -1).trim();
+  }
+
+  // ปลด UTF-8 / UTF-16 BOM
+  str = str.replace(/^\uFEFF/, '');
+
+  // 1. กรณีที่ส่งมาเป็น JSON String ตรงๆ (ขึ้นต้นด้วย {)
+  if (str.startsWith('{')) {
+    try {
+      return JSON.parse(str);
+    } catch (err) {
+      console.warn('⚠️ JSON Parse ตรงๆ ไม่ผ่าน กำลังลองปรับ Format Newlines...');
+      try {
+        // จัดการกรณีที่มี unescaped newlines ใน private_key
+        return JSON.parse(str.replace(/[\r\n]+/g, ' '));
+      } catch (err2) {
+        console.error('❌ ข้อผิดพลาดในการอ่าน JSON Service Account Key:', err.message);
+        throw new Error(`รูปแบบ JSON ใน GOOGLE_SERVICE_ACCOUNT_KEY ไม่ถูกต้อง: ${err.message}`);
+      }
+    }
+  }
+
+  // 2. กรณีที่ส่งมาเป็น Base64 String
+  try {
+    const decoded = Buffer.from(str, 'base64').toString('utf-8').trim().replace(/^\uFEFF/, '');
+    if (decoded.startsWith('{')) {
+      return JSON.parse(decoded);
+    }
+  } catch (err) {
+    // ไม่ใช่ Base64 ที่ถูกต้อง
+  }
+
+  throw new Error('ไม่สามารถแปลง GOOGLE_SERVICE_ACCOUNT_KEY เป็น JSON Object ได้ (โปรดตรวจสอบค่าใน GitHub Secrets)');
+}
+
+/**
  * เชื่อมต่อ Google Sheets API ด้วย Google Service Account Key
  */
 function getGoogleSheetsClient() {
   const keyEnv = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
-  if (!keyEnv) {
-    throw new Error('กรุณาระบุ GOOGLE_SERVICE_ACCOUNT_KEY ใน Environment Variables หรือ GitHub Secrets');
-  }
-
-  let credentials;
-  try {
-    credentials = JSON.parse(keyEnv);
-  } catch (e) {
-    const decoded = Buffer.from(keyEnv, 'base64').toString('utf-8');
-    credentials = JSON.parse(decoded);
-  }
+  const credentials = parseGoogleCredentials(keyEnv);
 
   const auth = new google.auth.GoogleAuth({
     credentials,
