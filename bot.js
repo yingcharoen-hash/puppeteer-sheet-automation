@@ -6,6 +6,7 @@ import { google } from 'googleapis';
 import 'dotenv/config';
 
 // --- การตั้งค่าสเปรดชีตและพาธ ---
+const TARGET_URL = process.env.WEB_URL || 'https://yingcharoen-parking.web.app';
 const SPREADSHEET_ID = '1Dts7FA1GIN-8-uNSMjwUod2p1TmYwwq-Ngj9rYbJk94';
 const RAW_DATA_SHEET_NAME = 'ข้อมูล';
 const SUMMARY_SHEET_NAME = 'สรุป';
@@ -92,8 +93,8 @@ async function runBot() {
   });
 
   try {
-    console.log('🌐 ไปที่หน้าล็อกอิน: https://web.app');
-    await page.goto('https://web.app', { waitUntil: 'networkidle2', timeout: 60000 });
+    console.log(`🌐 ไปที่หน้าล็อกอิน: ${TARGET_URL}`);
+    await page.goto(TARGET_URL, { waitUntil: 'networkidle2', timeout: 60000 });
 
     // 1. กรอกข้อมูลล็อกอิน
     console.log('🔑 กำลังกรอกข้อมูลล็อกอิน...');
@@ -113,7 +114,7 @@ async function runBot() {
     console.log('✅ ล็อกอินสำเร็จ');
 
     // 2. นำทางไปยังหน้า Export
-    await page.goto('https://web.app', { waitUntil: 'networkidle2', timeout: 60000 });
+    await page.goto(TARGET_URL, { waitUntil: 'networkidle2', timeout: 60000 });
 
     // คำนวณช่วงเวลา: Start Date = เมื่อวาน, End Date = วันนี้
     const startDate = getThaiDate(-1);
@@ -333,3 +334,4 @@ async function main() {
 }
 
 main();
+
