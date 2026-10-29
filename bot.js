@@ -5,8 +5,11 @@ import { parse } from 'csv-parse/sync';
 import { google } from 'googleapis';
 import 'dotenv/config';
 
-// --- การตั้งค่าสเปรดชีตและพาธ ---
-const TARGET_URL = process.env.WEB_URL || 'https://yingcharoen-parking.web.app';
+// --- การตั้งค่า URL และ สเปรดชีต ---
+const BASE_URL = process.env.WEB_URL || 'https://yingcharoen-parking.web.app';
+const LOGIN_URL = `${BASE_URL.replace(/\/+$/, '')}/login.html`;
+const EXPORT_URL = `${BASE_URL.replace(/\/+$/, '')}/export.html`;
+
 const SPREADSHEET_ID = '1Dts7FA1GIN-8-uNSMjwUod2p1TmYwwq-Ngj9rYbJk94';
 const RAW_DATA_SHEET_NAME = 'ข้อมูล';
 const SUMMARY_SHEET_NAME = 'สรุป';
@@ -56,34 +59,32 @@ function parseGoogleCredentials(raw) {
     } catch (err) {
       console.warn('⚠️ JSON Parse ตรงๆ ไม่ผ่าน กำลังลองปรับ Format Newlines...');
       try {
-        // จัดการกรณีที่มี unescaped newlines ใน private_key
         return JSON.parse(str.replace(/[\r\n]+/g, ' '));
       } catch (err2) {
-        console.error('❌ ข้อผิดพลาดในการอ่าน JSON Service Account Key:', err.message);
-        throw new Error(`รูปแบบ JSON ใน GOOGLE_SERVICE_ACCOUNT_KEY ไม่ถูกต้อง: ${err.message}`);
+        console.error('❌ ไม่สามารถแปลงเนื้อหา JSON ได้:', err.message);
+        throw new Error(`JSON parsing failed: ${err.message}`);
       }
     }
   }
 
-  // 2. กรณีที่ส่งมาเป็น Base64 String
+  // 2. กรณีที่ส่งมาเป็น Base64
   try {
     const decoded = Buffer.from(str, 'base64').toString('utf-8').trim().replace(/^\uFEFF/, '');
     if (decoded.startsWith('{')) {
       return JSON.parse(decoded);
     }
   } catch (err) {
-    // ไม่ใช่ Base64 ที่ถูกต้อง
+    // ไม่ใช่ Base64
   }
 
-  throw new Error('ไม่สามารถแปลง GOOGLE_SERVICE_ACCOUNT_KEY เป็น JSON Object ได้ (โปรดตรวจสอบค่าใน GitHub Secrets)');
+  throw new Error('GOOGLE_SERVICE_ACCOUNT_KEY มีรูปแบบไม่ถูกต้อง กรุณาตรวจสอบเนื้อหา JSON ใน GitHub Secrets');
 }
 
 /**
  * เชื่อมต่อ Google Sheets API ด้วย Google Service Account Key
  */
 function getGoogleSheetsClient() {
-  const keyEnv = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
-  const credentials = parseGoogleCredentials(keyEnv);
+  const credentials = parseGoogleCredentials(process.env.GOOGLE_SERVICE_ACCOUNT_KEY);
 
   const auth = new google.auth.GoogleAuth({
     credentials,
@@ -120,14 +121,12 @@ async function runBot() {
     ],
   };
 
-  // หากรันบน Ubuntu Runner ของ GitHub Actions ให้ใช้ System Chrome ทันที
   if (fs.existsSync('/usr/bin/google-chrome')) {
     launchOptions.executablePath = '/usr/bin/google-chrome';
     console.log('🌐 ใช้ Google Chrome ของระบบ: /usr/bin/google-chrome');
   }
 
   const browser = await puppeteer.launch(launchOptions);
-
   const page = await browser.newPage();
   await page.setViewport({ width: 1920, height: 1080 });
 
@@ -139,87 +138,79 @@ async function runBot() {
   });
 
   try {
-    console.log(`🌐 ไปที่หน้าล็อกอิน: ${TARGET_URL}`);
-    await page.goto(TARGET_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+    // 1. ไปที่หน้า Login
+    console.log(`🌐 ไปที่หน้าล็อกอิน: ${LOGIN_URL}`);
+    await page.goto(LOGIN_URL, { waitUntil: 'networkidle2', timeout: 60000 });
 
-    // 1. กรอกข้อมูลล็อกอิน
     console.log('🔑 กำลังกรอกข้อมูลล็อกอิน...');
-    const emailSelector = 'input[type="email"], input[name="email"], input[name="username"], #email';
-    const passwordSelector = 'input[type="password"], input[name="password"], #password';
-    const loginButtonSelector = 'button[type="submit"], input[type="submit"], .btn-login, button.btn-primary';
+    await page.waitForSelector('#email', { timeout: 15000 });
+    await page.type('#email', email, { delay: 50 });
+    await page.type('#password', password, { delay: 50 });
 
-    await page.waitForSelector(emailSelector, { timeout: 15000 });
-    await page.type(emailSelector, email, { delay: 50 });
-    await page.type(passwordSelector, password, { delay: 50 });
-
+    console.log('🔘 กำลังกดปุ่ม Sign In...');
     await Promise.all([
       page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {}),
-      page.click(loginButtonSelector),
+      page.click('#login-button'),
     ]);
 
-    console.log('✅ ล็อกอินสำเร็จ');
+    // ตรวจสอบ error alert จาก Firebase Auth
+    const errorText = await page.evaluate(() => {
+      const errEl = document.getElementById('error-message');
+      return errEl && !errEl.classList.contains('hidden') ? errEl.innerText.trim() : null;
+    });
 
-    // 2. นำทางไปยังหน้า Export
-    await page.goto(TARGET_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+    if (errorText) {
+      throw new Error(`การเข้าสู่ระบบล้มเหลว: ${errorText}`);
+    }
+
+    console.log('✅ ล็อกอินสำเร็จเรียบร้อย');
+
+    // 2. นำทางไปยังหน้า Export Data
+    console.log(`🌐 นำทางไปยังหน้าส่งออกข้อมูล: ${EXPORT_URL}`);
+    await page.goto(EXPORT_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+
+    // รอให้หน้า Export โหลด (รอปุ่ม export และฟิลด์ใส่วันที่)
+    await page.waitForSelector('#export-button', { timeout: 20000 });
+    await page.waitForSelector('#start-date', { timeout: 20000 });
 
     // คำนวณช่วงเวลา: Start Date = เมื่อวาน, End Date = วันนี้
     const startDate = getThaiDate(-1);
     const endDate = getThaiDate(0);
     console.log(`📅 กำหนดช่วงเวลา: Start Date = ${startDate} | End Date = ${endDate}`);
 
-    const startDateSelector = 'input[name="startDate"], input[name="start_date"], #startDate, input[placeholder*="Start"]';
-    const endDateSelector = 'input[name="endDate"], input[name="end_date"], #endDate, input[placeholder*="End"]';
-
-    if (await page.$(startDateSelector)) {
-      await page.click(startDateSelector, { clickCount: 3 });
-      await page.type(startDateSelector, startDate);
-    }
-
-    if (await page.$(endDateSelector)) {
-      await page.click(endDateSelector, { clickCount: 3 });
-      await page.type(endDateSelector, endDate);
-    }
-
-    // 3. เลือก Officer: "All Officers"
-    console.log('👤 เลือก Officer เป็น "All Officers"...');
-    const officerDropdownSelector = 'select[name="officer"], select[name="officer_id"], #officerSelect';
-    if (await page.$(officerDropdownSelector)) {
-      const optionValue = await page.evaluate((selector) => {
-        const select = document.querySelector(selector);
-        for (const opt of select.options) {
-          if (opt.text.toLowerCase().includes('all') || opt.value.toLowerCase().includes('all')) {
-            return opt.value;
-          }
-        }
-        return select.options[0]?.value;
-      }, officerDropdownSelector);
-
-      if (optionValue) {
-        await page.select(officerDropdownSelector, optionValue);
+    await page.evaluate((s, e) => {
+      const startEl = document.getElementById('start-date');
+      const endEl = document.getElementById('end-date');
+      if (startEl) {
+        startEl.value = s;
+        startEl.dispatchEvent(new Event('change', { bubbles: true }));
       }
-    }
+      if (endEl) {
+        endEl.value = e;
+        endEl.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    }, startDate, endDate);
+
+    // 3. เลือก Officer เป็น "All Officers"
+    console.log('👤 เลือก Officer เป็น "All Officers"...');
+    await page.waitForSelector('#officer-select', { timeout: 10000 });
+    await page.select('#officer-select', 'all');
 
     // 4. คลิกปุ่มสีเขียว "Export to CSV"
-    console.log('📥 กำลังค้นหาและคลิกปุ่มสีเขียว "Export to CSV"...');
-    const clicked = await page.evaluate(() => {
-      const buttons = Array.from(document.querySelectorAll('button, a, input[type="button"]'));
-      const targetBtn = buttons.find(b => 
-        (b.textContent && b.textContent.toLowerCase().includes('export to csv')) ||
-        (b.classList && (b.classList.contains('btn-success') || b.classList.contains('bg-green-500')))
-      );
-      if (targetBtn) {
-        targetBtn.click();
-        return true;
-      }
-      return false;
+    console.log('📥 กำลังคลิกปุ่มสีเขียว "Export to CSV"...');
+    await page.click('#export-button');
+
+    // ตรวจสอบสถานะการดึงข้อมูลบนหน้าเว็บ
+    await new Promise(r => setTimeout(r, 2000));
+    const statusText = await page.evaluate(() => {
+      const el = document.getElementById('export-status');
+      return el ? el.innerText : '';
     });
+    console.log(`ℹ️ สถานะการส่งออกจากหน้าเว็บ: "${statusText}"`);
 
-    if (!clicked) {
-      await page.click('button.btn-success, .export-btn, [data-action="export"]');
-    }
-
+    // รอการดาวน์โหลดไฟล์ CSV
     console.log('⏳ รอการดาวน์โหลดไฟล์ CSV...');
-    const downloadedFilePath = await waitForFileDownload(DOWNLOAD_DIR, 30000);
+    const downloadedFilePath = await waitForFileDownload(DOWNLOAD_DIR, 35000);
     console.log(`📁 ได้รับไฟล์ CSV เรียบร้อย: ${downloadedFilePath}`);
 
     return downloadedFilePath;
@@ -231,14 +222,19 @@ async function runBot() {
 /**
  * รอจนกว่าจะมีไฟล์ .csv ดาวน์โหลดลงในโฟลเดอร์สมบูรณ์
  */
-async function waitForFileDownload(downloadPath, timeoutMs = 30000) {
+async function waitForFileDownload(downloadPath, timeoutMs = 35000) {
   const startTime = Date.now();
   while (Date.now() - startTime < timeoutMs) {
     if (fs.existsSync(downloadPath)) {
       const files = fs.readdirSync(downloadPath);
       const csvFile = files.find(f => f.endsWith('.csv') && !f.endsWith('.crdownload') && !f.endsWith('.tmp'));
       if (csvFile) {
-        return path.join(downloadPath, csvFile);
+        const fullPath = path.join(downloadPath, csvFile);
+        // ตรวจสอบว่าไฟล์มีขนาดมากกว่า 0 bytes และเขียนเสร็จแล้ว
+        const stats = fs.statSync(fullPath);
+        if (stats.size > 0) {
+          return fullPath;
+        }
       }
     }
     await new Promise(resolve => setTimeout(resolve, 1000));
@@ -251,7 +247,10 @@ async function waitForFileDownload(downloadPath, timeoutMs = 30000) {
  */
 async function appendDataToSheet(sheets, csvFilePath) {
   console.log(`📊 กำลังอ่านข้อมูลดิบจาก ${csvFilePath}...`);
-  const fileContent = fs.readFileSync(csvFilePath, 'utf-8');
+  let fileContent = fs.readFileSync(csvFilePath, 'utf-8');
+
+  // ปลด UTF-8 BOM ที่เว็บสร้างมา
+  fileContent = fileContent.replace(/^\uFEFF/, '');
 
   const records = parse(fileContent, {
     skip_empty_lines: true,
@@ -259,11 +258,11 @@ async function appendDataToSheet(sheets, csvFilePath) {
   });
 
   if (records.length <= 1) {
-    console.log('⚠️ ไม่พบแถวข้อมูลใหม่ในไฟล์ CSV');
+    console.log('⚠️ ไม่พบแถวข้อมูลใหม่ในไฟล์ CSV (มีเฉพาะ Header หรือไม่มีข้อมูล)');
     return;
   }
 
-  // ข้ามแถวที่ 1 (Header) เพราะในชีทมีหัวตารางอยู่แล้ว
+  // ข้ามแถวที่ 1 (Header: รหัสพนักงาน, ชื่อ-นามสกุล, เวลาที่สแกน, สแกนโดย)
   const rowsToAppend = records.slice(1);
   console.log(`➕ กำลังนำข้อมูลจำนวน ${rowsToAppend.length} แถว Append ต่อท้ายในชีท "${RAW_DATA_SHEET_NAME}"...`);
 
@@ -293,7 +292,7 @@ async function resetPivotTableDateFilter(sheets) {
 
   const summarySheet = res.data.sheets.find(s => s.properties.title === SUMMARY_SHEET_NAME);
   if (!summarySheet || !summarySheet.data) {
-    console.log(`⚠️ ไม่พบข้อมูลชีท "${SUMMARY_SHEET_NAME}"`);
+    console.log(`⚠️ ไม่พบข้อมูลชีท "${SUMMARY_SHEET_NAME}" หรือไม่มี Pivot Table`);
     return;
   }
 
@@ -360,7 +359,7 @@ async function main() {
   try {
     console.log('=== เริ่มต้นกระบวนการ Daily Automation ===');
 
-    // 1. ตรวจสอบ GitHub Secrets / Environment Variables
+    // ตรวจสอบ GitHub Secrets
     const missingVars = [];
     if (!process.env.WEB_EMAIL) missingVars.push('WEB_EMAIL');
     if (!process.env.WEB_PASSWORD) missingVars.push('WEB_PASSWORD');
@@ -391,10 +390,9 @@ async function main() {
     fs.rmSync(DOWNLOAD_DIR, { recursive: true, force: true });
     console.log('🎉 เสร็จสิ้นกระบวนการทำงานทุกขั้นตอนเรียบร้อย 100%');
   } catch (err) {
-    console.error('❌ เกิดข้อผิดพลาด:', err);
+    console.error('❌ เกิดข้อผิดพลาด:', err.message || err);
     process.exit(1);
   }
 }
 
 main();
-
