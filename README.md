@@ -14,3 +14,4 @@
 
 ## การตั้งค่าสิทธิ์ Google Sheet
 - เพิ่มอีเมล `client_email` ของ Google Service Account ในสเปรดชีตด้วยสิทธิ์ **Editor**
+
