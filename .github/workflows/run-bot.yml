@@ -2,8 +2,8 @@ name: Daily Puppeteer Automation Bot
 
 on:
   schedule:
-    # 00:00 UTC = 07:00 น. ตามเวลาไทย (Asia/Bangkok / UTC+7) ทุกวัน
-    - cron: '0 0 * * *'
+    # 23:43 UTC = 06:43 น. ตามเวลาไทย (Asia/Bangkok / UTC+7) ทุกวัน (หลัง 06:30 น. และเลี่ยงคิวหน่วงของ GitHub)
+    - cron: '43 23 * * *'
   # อนุญาตให้กด Run workflow ด้วยตนเองผ่านหน้าเว็บ GitHub Actions
   workflow_dispatch:
 
