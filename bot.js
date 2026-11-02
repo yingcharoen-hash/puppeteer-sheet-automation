@@ -282,6 +282,8 @@ async function waitForFileDownload(downloadPath, timeoutMs = 35000) {
 
 /**
  * นำข้อมูลจาก CSV ไป Append ต่อท้ายแถวล่าสุดในชีท "ข้อมูล"
+ * พร้อมระบบป้องกันข้อมูลซ้ำ (Deduplication) โดยตรวจสอบ รหัสพนักงาน + เวลาที่สแกน
+ * หากบอททำงานซ้ำในวันเดียวกัน จะไม่นำข้อมูลที่มีอยู่แล้วในชีทไปวางซ้ำเด็ดขาด
  */
 async function appendDataToSheet(sheets, csvFilePath) {
   console.log(`📊 กำลังอ่านข้อมูลดิบจาก ${csvFilePath}...`);
@@ -297,13 +299,70 @@ async function appendDataToSheet(sheets, csvFilePath) {
 
   if (records.length <= 1) {
     console.log('⚠️ ไม่พบแถวข้อมูลใหม่ในไฟล์ CSV (มีเฉพาะ Header หรือไม่มีข้อมูล)');
-    return;
+    return false;
   }
 
   // ข้ามแถวที่ 1 (Header: รหัสพนักงาน, ชื่อ-นามสกุล, เวลาที่สแกน, สแกนโดย)
   // และกลับลำดับจากเก่าไปใหม่ (เนื่องจาก CSV บนเว็บเรียงแบบล่าสุดอยู่บน)
-  const rowsToAppend = records.slice(1).reverse();
-  console.log(`➕ กำลังนำข้อมูลจำนวน ${rowsToAppend.length} แถว Append ต่อท้ายในชีท "${RAW_DATA_SHEET_NAME}"...`);
+  const rawRows = records.slice(1).reverse();
+
+  // ดึงข้อมูลที่มีอยู่แล้วในชีท "ข้อมูล" เพื่อเช็คและกรองข้อมูลซ้ำ (Deduplication)
+  console.log(`🔍 กำลังตรวจสอบรายการที่มีอยู่แล้วในชีท "${RAW_DATA_SHEET_NAME}" เพื่อป้องกันข้อมูลซ้ำ...`);
+  const existingRes = await sheets.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `'${RAW_DATA_SHEET_NAME}'!A2:C`,
+    valueRenderOption: 'FORMATTED_VALUE',
+  });
+
+  // แปลงวันที่และเวลาให้อยู่ในรูปแบบมาตรฐานเดียวกันเพื่อเทียบความซ้ำซ้อน
+  // เช่น "2/11/2569, 7:00:39" และ "2/11/2569 07:00:39" -> "2/11/2569 7:00:39"
+  const normalizeScanTime = (val) => {
+    return String(val || '')
+      .replace(/,/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/\b0(\d):/g, '$1:'); // ตัดเลข 0 นำหน้าชั่วโมง เช่น 07:00:39 -> 7:00:39
+  };
+
+  const existingKeys = new Set();
+  for (const row of existingRes.data.values || []) {
+    const empId = String(row[0] || '').trim();
+    const scanTime = normalizeScanTime(row[2]);
+    if (empId && scanTime) {
+      existingKeys.add(`${empId}|${scanTime}`);
+    }
+  }
+
+  const rowsToAppend = [];
+  let skippedDuplicates = 0;
+
+  for (const row of rawRows) {
+    const empId = String(row[0] || '').trim();
+    // ล้างเครื่องหมายลูกน้ำ (,) ออกจากเวลาที่สแกน เช่น "2/11/2569, 7:00:39" -> "2/11/2569 7:00:39"
+    // เพื่อให้ Google Sheets แปลงเป็น Date/Time Value ได้ถูกต้อง 100%
+    if (row[2]) {
+      row[2] = String(row[2]).replace(/,/g, '').replace(/\s+/g, ' ').trim();
+    }
+    const key = `${empId}|${normalizeScanTime(row[2])}`;
+
+    if (existingKeys.has(key)) {
+      skippedDuplicates++;
+    } else {
+      existingKeys.add(key);
+      rowsToAppend.push(row);
+    }
+  }
+
+  if (skippedDuplicates > 0) {
+    console.log(`🛡️ ข้ามรายการที่มีอยู่ในชีทแล้วจำนวน ${skippedDuplicates} แถว (ป้องกันการวางข้อมูลซ้ำ)`);
+  }
+
+  if (rowsToAppend.length === 0) {
+    console.log(`ℹ️ ข้อมูลทั้งหมดในรอบนี้ (${rawRows.length} แถว) มีอยู่ในชีท "${RAW_DATA_SHEET_NAME}" ครบถ้วนแล้ว ไม่มีการวางซ้ำ`);
+    return false;
+  }
+
+  console.log(`➕ กำลังนำข้อมูลใหม่จำนวน ${rowsToAppend.length} แถว Append ต่อท้ายในชีท "${RAW_DATA_SHEET_NAME}"...`);
 
   await sheets.spreadsheets.values.append({
     spreadsheetId: SPREADSHEET_ID,
@@ -316,6 +375,7 @@ async function appendDataToSheet(sheets, csvFilePath) {
   });
 
   console.log('✅ บันทึกข้อมูลเข้า Google Sheets สำเร็จเรียบร้อย');
+  return true;
 }
 
 /**
@@ -337,7 +397,8 @@ async function sortDataByColumnC(sheets) {
   }
 
   const sheetId = rawSheet.properties.sheetId;
-  const colCount = rawSheet.properties.gridProperties?.columnCount || 9;
+  // ขยายแค่คอลัมน์ A ถึง D (4 คอลัมน์แรก) เพื่อไม่ให้กระทบสูตร ARRAYFORMULA ในคอลัมน์ E-I ที่แถว 2
+  const colCount = 4;
 
   await sheets.spreadsheets.batchUpdate({
     spreadsheetId: SPREADSHEET_ID,
@@ -349,7 +410,7 @@ async function sortDataByColumnC(sheets) {
               sheetId: sheetId,
               startRowIndex: 1, // ข้ามแถวที่ 1 (Header)
               startColumnIndex: 0,
-              endColumnIndex: colCount,
+              endColumnIndex: colCount, // เรียงเฉพาะคอลัมน์ A-D
             },
             sortSpecs: [
               {
