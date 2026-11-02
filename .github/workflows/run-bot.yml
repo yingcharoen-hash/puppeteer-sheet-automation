@@ -2,9 +2,11 @@ name: Daily Puppeteer Automation Bot
 
 on:
   schedule:
-    # 23:43 UTC = 06:43 น. ตามเวลาไทย (Asia/Bangkok / UTC+7) ทุกวัน (หลัง 06:30 น. และเลี่ยงคิวหน่วงของ GitHub)
+    # ตั้งเวลาล่วงหน้าเผื่อคิวหน่วงของ GitHub + มีระบบสั่งรันตรงเวลา 06:43 น. ควบคู่กัน
+    # (ใน bot.js มีระบบป้องกันข้อมูลซ้ำ 100% จึงไม่เกิดการวางข้อมูลซ้ำแม้รันหลายรอบ)
+    - cron: '15 22 * * *'
     - cron: '43 23 * * *'
-  # อนุญาตให้กด Run workflow ด้วยตนเองผ่านหน้าเว็บ GitHub Actions
+  # อนุญาตให้กด Run workflow ด้วยตนเอง หรือสั่งผ่าน API (workflow_dispatch) เพื่อให้ทำงานทันทีโดยไม่ติดคิวหน่วง
   workflow_dispatch:
 
 jobs:
