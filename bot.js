@@ -524,11 +524,46 @@ async function resetPivotTableDateFilter(sheets) {
 }
 
 /**
+ * รอจนถึงเวลาเป้าหมายตามเวลาประเทศไทย (เช่น 06:35 น.) หาก GitHub เรียกบอทขึ้นมาเร็วกว่ากำหนด
+ */
+async function waitUntilMorningTargetTime(targetHour = 6, targetMinute = 35) {
+  const getNowThai = () => {
+    const now = new Date();
+    return new Date(now.getTime() + (7 * 60 + now.getTimezoneOffset()) * 60000);
+  };
+
+  let thaiNow = getNowThai();
+  const h = thaiNow.getHours();
+  const m = thaiNow.getMinutes();
+
+  // หากบอทถูกเรียกขึ้นมาในช่วงเช้ามืด (01:00 - 06:34 น.) ให้รอจนถึง 06:35 น. เพื่อให้ครอบคลุมข้อมูลกะดึกครบ 100%
+  if (h >= 1 && (h < targetHour || (h === targetHour && m < targetMinute))) {
+    const targetTime = new Date(thaiNow);
+    targetTime.setHours(targetHour, targetMinute, 0, 0);
+    const waitMs = targetTime.getTime() - thaiNow.getTime();
+
+    // รอได้สูงสุดไม่เกิน 5 ชั่วโมง (ภายในลิมิต 6 ชั่วโมงของ GitHub Actions)
+    if (waitMs > 0 && waitMs <= 5 * 60 * 60 * 1000) {
+      const waitMins = Math.ceil(waitMs / 60000);
+      console.log(`⏰ บอทได้รับคิวจาก GitHub เร็วกว่ากำหนด (เวลาไทยปัจจุบัน ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')} น.)`);
+      console.log(`⏳ กำลังพักรอ ${waitMins} นาที จนถึงเวลา ${String(targetHour).padStart(2, '0')}:${String(targetMinute).padStart(2, '0')} น. เพื่อดึงข้อมูลหลังตัดกะ 06:30 น. ...`);
+      await new Promise(resolve => setTimeout(resolve, waitMs));
+      console.log(`✅ ถึงเวลา ${String(targetHour).padStart(2, '0')}:${String(targetMinute).padStart(2, '0')} น. แล้ว เริ่มดึงข้อมูลทันที!`);
+    }
+  }
+}
+
+/**
  * ฟังก์ชันหลักในการรัน Process ทั้งหมด
  */
 async function main() {
   try {
     console.log('=== เริ่มต้นกระบวนการ Daily Automation ===');
+
+    // หากเป็นรอบที่รันอัตโนมัติจาก schedule และได้คิวก่อน 06:35 น. ให้รอจนถึง 06:35 น.
+    if (process.env.GITHUB_EVENT_NAME === 'schedule') {
+      await waitUntilMorningTargetTime(6, 35);
+    }
 
     // ตรวจสอบ GitHub Secrets
     const missingVars = [];
