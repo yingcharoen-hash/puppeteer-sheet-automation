@@ -536,14 +536,14 @@ async function waitUntilMorningTargetTime(targetHour = 6, targetMinute = 35) {
   const h = thaiNow.getHours();
   const m = thaiNow.getMinutes();
 
-  // หากบอทถูกเรียกขึ้นมาในช่วงเช้ามืด (01:00 - 06:34 น.) ให้รอจนถึง 06:35 น. เพื่อให้ครอบคลุมข้อมูลกะดึกครบ 100%
-  if (h >= 1 && (h < targetHour || (h === targetHour && m < targetMinute))) {
+  // หากบอทถูกเรียกขึ้นมาในช่วงเช้ามืด (00:30 - 06:34 น.) ให้รอจนถึง 06:35 น. เพื่อให้ครอบคลุมข้อมูลกะดึกครบ 100%
+  if (h < targetHour || (h === targetHour && m < targetMinute)) {
     const targetTime = new Date(thaiNow);
     targetTime.setHours(targetHour, targetMinute, 0, 0);
     const waitMs = targetTime.getTime() - thaiNow.getTime();
 
-    // รอได้สูงสุดไม่เกิน 5 ชั่วโมง (ภายในลิมิต 6 ชั่วโมงของ GitHub Actions)
-    if (waitMs > 0 && waitMs <= 5 * 60 * 60 * 1000) {
+    // รอได้สูงสุดไม่เกิน 5.5 ชั่วโมง (ภายในลิมิต 6 ชั่วโมงของ GitHub Actions)
+    if (waitMs > 0 && waitMs <= 5.5 * 60 * 60 * 1000) {
       const waitMins = Math.ceil(waitMs / 60000);
       console.log(`⏰ บอทได้รับคิวจาก GitHub เร็วกว่ากำหนด (เวลาไทยปัจจุบัน ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')} น.)`);
       console.log(`⏳ กำลังพักรอ ${waitMins} นาที จนถึงเวลา ${String(targetHour).padStart(2, '0')}:${String(targetMinute).padStart(2, '0')} น. เพื่อดึงข้อมูลหลังตัดกะ 06:30 น. ...`);
